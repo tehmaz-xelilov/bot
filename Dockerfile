@@ -1,7 +1,7 @@
 FROM node:18-slim
 
-# Puppeteer üçün lazım olan asılılıqları (Chromium libraries) yükləyirik
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && \
+    apt-get install -y \
     wget \
     gnupg \
     ca-certificates \
@@ -27,15 +27,14 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Puppeteer-in yüklənmiş Chromium-u istifadə etməsi üçün mühit dəyişəni
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-WORKDIR /usr/src/app
-
+WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm install --production
 
 COPY . .
 
-CMD [ "npm", "start" ]
+EXPOSE 3000
+CMD ["node", "bot.js"]
