@@ -164,7 +164,7 @@ const telegram = new TelegramBot(config.telegram.token, { polling: true });
 const mainMenuKeyboard = {
     reply_markup: {
         keyboard: [
-            ['📤 Mesaj Göndər', '📎 Media Göndər'],
+            ['📤 Mesaj Göndər', '👥 Kontaktlar'],
             ['📊 Statistika', '⚙️ Status'],
             ['❓ Kömək']
         ],
@@ -322,7 +322,8 @@ const STATES = {
     IDLE: 'IDLE',
     AWAITING_NUMBER: 'AWAITING_NUMBER',
     AWAITING_MESSAGE: 'AWAITING_MESSAGE',
-    AWAITING_MEDIA_NUMBER: 'AWAITING_MEDIA_NUMBER'
+    AWAITING_MEDIA_NUMBER: 'AWAITING_MEDIA_NUMBER',
+    AWAITING_SEARCH: 'AWAITING_SEARCH'
 };
 
 // ============ İNLİNE DÜYMƏ İDARƏETMƏSİ ============
@@ -344,14 +345,36 @@ telegram.on('message', async (msg) => {
         return;
     }
 
-    if (msg.text === '🔙 Ana Menyu') {
+    if (msg.text === '👥 Kontaktlar') {
+        await showContacts(msg.chat.id, 0);
+        return;
+    }
+
+    if (msg.text === '🔙 Ana Menyu' || msg.text === '🔙 Ləğv Et') {
         userStates[msg.chat.id] = { type: STATES.IDLE };
-        await telegram.sendMessage(msg.chat.id, 'Ana menyu:', mainMenuKeyboard);
+        await telegram.sendMessage(msg.chat.id, 'Əməliyyat ləğv edildi.', mainMenuKeyboard);
+        return;
+    }
+
+    if (msg.text === '💬 Mesaj' && state.number) {
+        userStates[msg.chat.id] = { type: STATES.AWAITING_MESSAGE, number: state.number };
+        await telegram.sendMessage(msg.chat.id, `📝 *${state.number}* nömrəsinə göndərmək istədiyiniz mesajı yazın:`, { parse_mode: 'Markdown' });
+        return;
+    }
+
+    if (msg.text === '📎 Media' && state.number) {
+        userStates[msg.chat.id] = { type: STATES.AWAITING_MEDIA_NUMBER, number: state.number };
+        await telegram.sendMessage(msg.chat.id, `📎 *${state.number}* nömrəsinə göndərmək istədiyiniz medianı (şəkil, video və s.) bura göndərin (və ya reply edin).`, backKeyboard);
         return;
     }
 
     // Dialoq Rejimi İdarəetməsi
     switch (state.type) {
+        case STATES.AWAITING_SEARCH:
+            userStates[msg.chat.id] = { type: STATES.IDLE };
+            await showContacts(msg.chat.id, 0, msg.text);
+            break;
+
         case STATES.AWAITING_NUMBER:
             const num = msg.text.replace(/\s+/g, '');
             if (normalizePhoneNumber(num)) {
@@ -388,6 +411,124 @@ telegram.on('message', async (msg) => {
                 await telegram.sendMessage(msg.chat.id, `✅ Hazırdır! İndi göndərmək istədiyiniz media faylını (şəkil, video və s.) bura göndərin və caption (açıqlama) hissəsinə heç nə yazmadan göndərin. Sonra həmin fayla reply edərək /send ${mNum} yazın.`);
             }
             break;
+    }
+});
+
+// ============ KONTAKT İDARƏETMƏSİ ============
+async function showContacts(chatId, page = 0, query = '') {
+    try {
+        let contacts = await whatsapp.getContacts();
+        
+        // Filtrə: Adı olan və qrup olmayanlar
+        contacts = contacts.filter(c => !c.isGroup && (c.name || c.pushname));
+        
+        if (query) {
+            contacts = contacts.filter(c => 
+                (c.name && c.name.toLowerCase().includes(query.toLowerCase())) ||
+                (c.pushname && c.pushname.toLowerCase().includes(query.toLowerCase())) ||
+                c.id.user.includes(query)
+            );
+        }
+
+        // Əlifba sırası
+        contacts.sort((a, b) => (a.name || a.pushname).localeCompare(b.name || b.pushname));
+
+        const pageSize = 10;
+        const totalPages = Math.ceil(contacts.length / pageSize);
+        const start = page * pageSize;
+        const pagedContacts = contacts.slice(start, start + pageSize);
+
+        if (contacts.length === 0) {
+            await telegram.sendMessage(chatId, query ? `🔍 "${query}" üçün nəticə tapılmadı.` : '📭 Kontakt siyahısı boşdur.', mainMenuKeyboard);
+            return;
+        }
+
+        const buttons = pagedContacts.map(c => ([{
+            text: `👤 ${c.name || c.pushname} (${c.id.user})`,
+            callback_data: `sel_${c.id.user}`
+        }]));
+
+        // Naviqasiya düymələri
+        const navButtons = [];
+        if (page > 0) navButtons.push({ text: '⬅️ Əvvəlki', callback_data: `page_${page - 1}_${query}` });
+        if (page < totalPages - 1) navButtons.push({ text: 'Növbəti ➡️', callback_data: `page_${page + 1}_${query}` });
+        
+        if (navButtons.length > 0) buttons.push(navButtons);
+        
+        buttons.push([
+            { text: '🔍 Axtar', callback_data: 'search_contacts' },
+            { text: '❌ Bağla', callback_data: 'close_contacts' }
+        ]);
+
+        const text = query 
+            ? `🔍 Axtarış: "${query}" (${contacts.length} nəticə)` 
+            : `👥 Kontaktlar (${start + 1}-${Math.min(start + pageSize, contacts.length)} / ${contacts.length}):`;
+
+        await telegram.sendMessage(chatId, text, {
+            reply_markup: { inline_keyboard: buttons }
+        });
+    } catch (err) {
+        logger.error(`Kontaktları göstərmə xətası: ${err.message}`);
+        await telegram.sendMessage(chatId, '❌ Kontaktlar yüklənərkən xəta baş verdi.');
+    }
+}
+
+// ============ CALLBACK İDARƏETMƏSİ ============
+telegram.on('callback_query', async (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
+
+    if (data.startsWith('reply_')) {
+        const phoneNumber = data.replace('reply_', '');
+        userStates[chatId] = { type: STATES.AWAITING_MESSAGE, number: phoneNumber };
+        
+        await telegram.answerCallbackQuery(callbackQuery.id);
+        await telegram.sendMessage(chatId, `💬 *${phoneNumber}* nömrəsinə cavab yazın:`, { 
+            parse_mode: 'Markdown',
+            reply_markup: {
+                keyboard: [['🔙 Ləğv Et']],
+                resize_keyboard: true,
+                one_time_keyboard: true
+            }
+        });
+    }
+
+    // Kontakt Seçimi
+    if (data.startsWith('sel_')) {
+        const num = data.replace('sel_', '');
+        userStates[chatId] = { type: STATES.AWAITING_MESSAGE, number: num };
+        await telegram.answerCallbackQuery(callbackQuery.id);
+        await telegram.sendMessage(chatId, `👤 Kontakt seçildi: *${num}*\nNə göndərək?`, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                keyboard: [['💬 Mesaj', '📎 Media'], ['🔙 Ana Menyu']],
+                resize_keyboard: true
+            }
+        });
+    }
+
+    // Səhifələmə
+    if (data.startsWith('page_')) {
+        const parts = data.split('_');
+        const page = parseInt(parts[1]);
+        const query = parts.slice(2).join('_');
+        await telegram.answerCallbackQuery(callbackQuery.id);
+        await telegram.deleteMessage(chatId, callbackQuery.message.message_id);
+        await showContacts(chatId, page, query);
+    }
+
+    // Axtarış
+    if (data === 'search_contacts') {
+        userStates[chatId] = { type: STATES.AWAITING_SEARCH };
+        await telegram.answerCallbackQuery(callbackQuery.id);
+        await telegram.sendMessage(chatId, '🔍 Axtarmaq istədiyiniz adı və ya nömrəni daxil edin:', backKeyboard);
+    }
+
+    // Bağla
+    if (data === 'close_contacts') {
+        await telegram.answerCallbackQuery(callbackQuery.id);
+        await telegram.deleteMessage(chatId, callbackQuery.message.message_id);
+        await telegram.sendMessage(chatId, 'Kontaktlar bağlandı.', mainMenuKeyboard);
     }
 });
 
@@ -829,7 +970,15 @@ whatsapp.on('message', async (msg) => {
         
         report += `📝 ${messageType}: ${escapeMarkdown(messageBody)}`;
         
-        await sendToTelegram(report, { parse_mode: 'Markdown' });
+        const inlineKeyboard = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: `💬 ${contactInfo.name}-a Cavab Yaz`, callback_data: `reply_${contactInfo.phone}` }]
+                ]
+            }
+        };
+
+        await sendToTelegram(report, { parse_mode: 'Markdown', ...inlineKeyboard });
         logger.info(`Mesaj qəbul edildi: ${contactInfo.phone} - ${messageType}`);
         
         // Media varsa göndər
