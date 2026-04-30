@@ -230,62 +230,70 @@
     <script>
         const socket = io();
         let activeChat = null;
-        const chats = new Map();
+        const chats = new Map(); // { id: { name, messages: [], lastMsg } }
 
         // Socket Eventləri
         socket.on('connect', () => {
             document.getElementById('status').textContent = 'Online';
             document.getElementById('status').classList.add('online');
+            // Qoşulanda əgər serverdə kontaktlar varsa onları istəyə bilərik
+            socket.emit('get_initial_chats');
         });
 
-        socket.on('disconnect', () => {
-            document.getElementById('status').textContent = 'Offline';
-            document.getElementById('status').classList.remove('online');
-        });
-
-        socket.on('whatsapp_ready', () => {
-            document.getElementById('status').textContent = 'WhatsApp Hazır';
-            document.getElementById('status').classList.add('online');
+        socket.on('initial_chats', (initialChats) => {
+            initialChats.forEach(chat => {
+                if (!chats.has(chat.id)) {
+                    createChatItem(chat.id, chat.name, chat.lastMsg || '');
+                }
+            });
         });
 
         socket.on('new_message', (msg) => {
-            console.log('Yeni mesaj:', msg);
-            updateChatList(msg);
-            if (activeChat === msg.from) {
-                appendMessage(msg, 'in');
+            const chatId = msg.from;
+            
+            // Mesajı yaddaşda saxla
+            if (!chats.has(chatId)) {
+                createChatItem(chatId, msg.sender, msg.body);
+            }
+            
+            const chatData = chats.get(chatId);
+            chatData.messages.push({ body: msg.body, type: 'in', time: new Date() });
+            chatData.lastMsg = msg.body;
+            
+            // Siyahını yenilə
+            const item = document.getElementById(`chat-${chatId}`);
+            item.querySelector('.chat-last-msg').textContent = msg.body;
+            document.getElementById('chatList').prepend(item);
+
+            // Əgər hazırda bu söhbət açıqdırsa, ekrana çıxar
+            if (activeChat === chatId) {
+                appendMessage(msg.body, 'in');
             }
         });
 
         socket.on('message_sent', (msg) => {
-            if (activeChat === msg.to) {
-                appendMessage(msg, 'out');
+            const chatId = msg.to;
+            if (chats.has(chatId)) {
+                chats.get(chatId).messages.push({ body: msg.body, type: 'out', time: new Date() });
             }
         });
 
         // Funksiyalar
-        function updateChatList(msg) {
+        function createChatItem(id, name, lastMsg) {
             const chatList = document.getElementById('chatList');
-            const chatId = msg.from;
-            
-            if (!chats.has(chatId)) {
-                const item = document.createElement('div');
-                item.className = 'chat-item';
-                item.id = `chat-${chatId}`;
-                item.innerHTML = `
-                    <div class="chat-avatar">${msg.sender[0]}</div>
-                    <div class="chat-info">
-                        <div class="chat-name">${msg.sender}</div>
-                        <div class="chat-last-msg">${msg.body}</div>
-                    </div>
-                `;
-                item.onclick = () => selectChat(chatId, msg.sender);
-                chatList.prepend(item);
-                chats.set(chatId, { name: msg.sender, lastMsg: msg.body });
-            } else {
-                const item = document.getElementById(`chat-${chatId}`);
-                item.querySelector('.chat-last-msg').textContent = msg.body;
-                chatList.prepend(item);
-            }
+            const item = document.createElement('div');
+            item.className = 'chat-item';
+            item.id = `chat-${id}`;
+            item.innerHTML = `
+                <div class="chat-avatar">${name[0]}</div>
+                <div class="chat-info">
+                    <div class="chat-name">${name}</div>
+                    <div class="chat-last-msg">${lastMsg}</div>
+                </div>
+            `;
+            item.onclick = () => selectChat(id, name);
+            chatList.prepend(item);
+            chats.set(id, { name: name, messages: [], lastMsg: lastMsg });
         }
 
         function selectChat(id, name) {
@@ -294,20 +302,30 @@
             document.getElementById('chatHeader').style.display = 'flex';
             document.getElementById('activeName').textContent = name;
             document.getElementById('activeAvatar').textContent = name[0];
-            document.getElementById('msgContainer').innerHTML = '';
+            
+            const container = document.getElementById('msgContainer');
+            container.innerHTML = '';
+            
+            // Yaddaşdakı mesajları yüklə
+            const chatData = chats.get(id);
+            if (chatData && chatData.messages) {
+                chatData.messages.forEach(m => {
+                    appendMessage(m.body, m.type, m.time);
+                });
+            }
             
             // Aktivlik vizualı
             document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
             document.getElementById(`chat-${id}`).classList.add('active');
         }
 
-        function appendMessage(msg, type) {
+        function appendMessage(body, type, time = new Date()) {
             const container = document.getElementById('msgContainer');
             const div = document.createElement('div');
             div.className = `message ${type}`;
             div.innerHTML = `
-                ${msg.body}
-                <div class="msg-time">${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                ${body}
+                <div class="msg-time">${new Date(time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
             `;
             container.appendChild(div);
             container.scrollTop = container.scrollHeight;
@@ -318,12 +336,18 @@
             const input = document.getElementById('msgInput');
             if (!input.value || !activeChat) return;
 
+            const body = input.value;
             socket.emit('send_whatsapp', {
                 to: activeChat,
-                body: input.value
+                body: body
             });
 
-            appendMessage({ body: input.value }, 'out');
+            // Öz mesajımızı da yaddaşa yazaq
+            if (chats.has(activeChat)) {
+                chats.get(activeChat).messages.push({ body: body, type: 'out', time: new Date() });
+            }
+
+            appendMessage(body, 'out');
             input.value = '';
         };
     </script>
