@@ -316,37 +316,78 @@ async function downloadFromUrl(url) {
     }
 }
 
+// ============ VƏZİYYƏT İDARƏETMƏSİ (STATE) ============
+const userStates = {};
+const STATES = {
+    IDLE: 'IDLE',
+    AWAITING_NUMBER: 'AWAITING_NUMBER',
+    AWAITING_MESSAGE: 'AWAITING_MESSAGE',
+    AWAITING_MEDIA_NUMBER: 'AWAITING_MEDIA_NUMBER'
+};
+
 // ============ İNLİNE DÜYMƏ İDARƏETMƏSİ ============
-telegram.onText(/📤 Mesaj Göndər/, async (msg) => {
-    if (!isAdmin(msg.chat.id)) return;
-    
-    const info = `📤 *Mətn Mesajı Göndərmək üçün:*\n\n` +
-        `Format: \`/send 994501234567 Mesajınız\`\n\n` +
-        `*Nömrə formatları:*\n` +
-        `• 994501234567\n` +
-        `• +994501234567\n` +
-        `• 0501234567`;
-    
-    await telegram.sendMessage(msg.chat.id, info, { parse_mode: 'Markdown' });
+telegram.on('message', async (msg) => {
+    if (!isAdmin(msg.chat.id) || msg.text?.startsWith('/')) return;
+
+    const state = userStates[msg.chat.id] || { type: STATES.IDLE };
+
+    // Ana Menyu Düymələri
+    if (msg.text === '📤 Mesaj Göndər') {
+        userStates[msg.chat.id] = { type: STATES.AWAITING_NUMBER };
+        await telegram.sendMessage(msg.chat.id, '📱 Mesaj göndərmək istədiyiniz nömrəni daxil edin:\n(Nümunə: 994501234567)', backKeyboard);
+        return;
+    }
+
+    if (msg.text === '📎 Media Göndər') {
+        userStates[msg.chat.id] = { type: STATES.AWAITING_MEDIA_NUMBER };
+        await telegram.sendMessage(msg.chat.id, '📎 Media göndərmək istədiyiniz nömrəni daxil edin:', backKeyboard);
+        return;
+    }
+
+    if (msg.text === '🔙 Ana Menyu') {
+        userStates[msg.chat.id] = { type: STATES.IDLE };
+        await telegram.sendMessage(msg.chat.id, 'Ana menyu:', mainMenuKeyboard);
+        return;
+    }
+
+    // Dialoq Rejimi İdarəetməsi
+    switch (state.type) {
+        case STATES.AWAITING_NUMBER:
+            const num = msg.text.replace(/\s+/g, '');
+            if (normalizePhoneNumber(num)) {
+                userStates[msg.chat.id] = { type: STATES.AWAITING_MESSAGE, number: num };
+                await telegram.sendMessage(msg.chat.id, `✅ Nömrə: ${num}\nindi isə göndərmək istədiyiniz *mesajı* yazın:`, { parse_mode: 'Markdown' });
+            } else {
+                await telegram.sendMessage(msg.chat.id, '❌ Yanlış nömrə formatı. Yenidən cəhd edin və ya /start yazaraq ləğv edin.');
+            }
+            break;
+
+        case STATES.AWAITING_MESSAGE:
+            try {
+                const targetNum = normalizePhoneNumber(state.number);
+                await whatsapp.sendMessage(targetNum, msg.text);
+                stats.incrementSent();
+                await telegram.sendMessage(msg.chat.id, `✅ Mesaj ${state.number} nömrəsinə göndərildi!`, mainMenuKeyboard);
+                userStates[msg.chat.id] = { type: STATES.IDLE };
+            } catch (err) {
+                await telegram.sendMessage(msg.chat.id, `❌ Göndərilmədi: ${err.message}`);
+            }
+            break;
+
+        case STATES.AWAITING_MEDIA_NUMBER:
+            const mNum = msg.text.replace(/\s+/g, '');
+            if (normalizePhoneNumber(mNum)) {
+                userStates[msg.chat.id] = { type: STATES.IDLE }; // Media üçün hələlik köhnə reply üsulu daha rahatdır
+                await telegram.sendMessage(msg.chat.id, `✅ Hazırdır! İndi göndərmək istədiyiniz media faylını (şəkil, video və s.) bura göndərin və caption (açıqlama) hissəsinə heç nə yazmadan göndərin. Sonra həmin fayla reply edərək /send ${mNum} yazın.`);
+            }
+            break;
+    }
 });
 
-telegram.onText(/📎 Media Göndər/, async (msg) => {
-    if (!isAdmin(msg.chat.id)) return;
-    
-    const info = `📎 *Media Göndərmək üçün 3 yol:*\n\n` +
-        `*1. Reply ilə:*\n` +
-        `• Media faylı bura göndərin\n` +
-        `• Həmin fayla reply edin\n` +
-        `• \`/send 994501234567\` yazın\n\n` +
-        `*2. URL ilə:*\n` +
-        `• \`/sendurl 994501234567 https://example.com/image.jpg\`\n\n` +
-        `*3. Birbaşa komanda:*\n` +
-        `• Şəkil göndərin və caption-a \`/to 994501234567\` yazın`;
-    
-    await telegram.sendMessage(msg.chat.id, info, { parse_mode: 'Markdown' });
-});
+// ============ KOMANDALAR ============
 
-telegram.onText(/📊 Statistika/, async (msg) => {
+// /stats - Statistika
+telegram.onText(/\/stats/, async (msg) => {
     if (!isAdmin(msg.chat.id)) return;
     
     const today = new Date().toISOString().split('T')[0];
@@ -355,54 +396,45 @@ telegram.onText(/📊 Statistika/, async (msg) => {
     const report = `📊 *Statistika*\n\n` +
         `⏰ İşləmə müddəti: ${stats.getUptime()}\n\n` +
         `*Ümumi:*\n` +
-        `📨 Qəbul edilən mesaj: ${stats.messagesReceived}\n` +
-        `📤 Göndərilən mesaj: ${stats.messagesSent}\n` +
-        `📥 Qəbul edilən media: ${stats.mediaReceived}\n` +
-        `📎 Göndərilən media: ${stats.mediaSent}\n\n` +
+        `📨 Qəbul: ${stats.messagesReceived}\n` +
+        `📤 Göndərilən: ${stats.messagesSent}\n` +
+        `📥 Media qəbul: ${stats.mediaReceived}\n` +
+        `📎 Media göndərilib: ${stats.mediaSent}\n\n` +
         `*Bu gün:*\n` +
         `📨 Qəbul: ${todayStats.received}\n` +
-        `📤 Göndərilən: ${todayStats.sent}\n` +
-        `📥 Media qəbul: ${todayStats.mediaReceived}\n` +
-        `📎 Media göndərilib: ${todayStats.mediaSent}`;
+        `📤 Göndərilən: ${todayStats.sent}`;
     
     await telegram.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
 });
 
-telegram.onText(/⚙️ Status/, async (msg) => {
+// /status - Sistem statusu
+telegram.onText(/\/status/, async (msg) => {
     if (!isAdmin(msg.chat.id)) return;
-    
-    const state = await whatsapp.getState();
-    const memory = process.memoryUsage();
-    
-    const status = `⚙️ *Sistem Statusu*\n\n` +
-        `WhatsApp: ${state === 'CONNECTED' ? '✅ Bağlıdır' : '❌ Bağlı deyil'}\n` +
-        `RAM: ${Math.round(memory.heapUsed / 1024 / 1024)}MB / ${Math.round(memory.heapTotal / 1024 / 1024)}MB\n` +
-        `İşləmə müddəti: ${stats.getUptime()}\n` +
-        `Saat: ${new Date().toLocaleString('az-AZ')}`;
-    
-    await telegram.sendMessage(msg.chat.id, status, { parse_mode: 'Markdown' });
+    try {
+        const state = await whatsapp.getState();
+        const memory = process.memoryUsage();
+        const status = `⚙️ *Sistem Statusu*\n\n` +
+            `WhatsApp: ${state === 'CONNECTED' ? '✅ Bağlıdır' : '❌ Bağlı deyil'}\n` +
+            `RAM: ${Math.round(memory.heapUsed / 1024 / 1024)}MB\n` +
+            `Uptime: ${stats.getUptime()}`;
+        await telegram.sendMessage(msg.chat.id, status, { parse_mode: 'Markdown' });
+    } catch (e) {
+        await telegram.sendMessage(msg.chat.id, `❌ Status yoxlanılarkən xəta: ${e.message}`);
+    }
 });
 
-telegram.onText(/❓ Kömək/, async (msg) => {
+// /help - Kömək
+telegram.onText(/\/help/, async (msg) => {
     if (!isAdmin(msg.chat.id)) return;
-    
     const help = `🤖 *WhatsApp Bridge Bot*\n\n` +
-        `*Əsas komandalar:*\n` +
-        `📤 \`/send [nömrə] [mesaj]\` - Mətn göndər\n` +
-        `🔗 \`/sendurl [nömrə] [url]\` - URL-dən media göndər\n` +
-        `📢 \`/broadcast [nömrələr] [mesaj]\` - Kütləvi mesaj\n` +
-        `📊 \`/stats\` - Statistika\n` +
-        `🔍 \`/check [nömrə]\` - Nömrə yoxla`;
-    
+        `*Düymələrlə istifadə:* Aşağıdakı menyudan istifadə edərək nömrə və mesajı dialoq şəklində göndərə bilərsiniz.\n\n` +
+        `*Komandalar:*\n` +
+        `📤 \`/send [nömrə] [mesaj]\` - Sürətli göndər\n` +
+        `🔗 \`/sendurl [nömrə] [url]\` - Linkdən şəkil göndər\n` +
+        `📢 \`/broadcast [nömrələr] [mesaj]\` - Toplu mesaj\n` +
+        `🔍 \`/check [nömrə]\` - Nömrəni yoxla`;
     await telegram.sendMessage(msg.chat.id, help, { parse_mode: 'Markdown' });
 });
-
-telegram.onText(/🔙 Ana Menyu/, async (msg) => {
-    if (!isAdmin(msg.chat.id)) return;
-    await telegram.sendMessage(msg.chat.id, 'Ana menyu:', mainMenuKeyboard);
-});
-
-// ============ KOMANDALAR ============
 
 // /start - Ana menyunu göstər
 telegram.onText(/\/start/, async (msg) => {
