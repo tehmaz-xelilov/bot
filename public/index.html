@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp UserBot Dashboard</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-main: #0f172a;
+            --bg-sidebar: #1e293b;
+            --accent: #10b981;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --border: #334155;
+            --msg-in: #334155;
+            --msg-out: #065f46;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
+
+        body {
+            background: var(--bg-main);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 350px;
+            background: var(--bg-sidebar);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-badge {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            background: #ef4444;
+            color: white;
+        }
+
+        .status-badge.online { background: var(--accent); }
+
+        .chat-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .chat-item {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .chat-item:hover { background: #334155; }
+        .chat-item.active { background: #334155; border-left: 4px solid var(--accent); }
+
+        .chat-avatar {
+            width: 45px;
+            height: 45px;
+            background: #475569;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+
+        .chat-info { flex: 1; overflow: hidden; }
+        .chat-name { font-weight: 500; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chat-last-msg { font-size: 13px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* Main Chat Area */
+        .main-chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-main);
+            position: relative;
+        }
+
+        .chat-header {
+            padding: 15px 25px;
+            background: var(--bg-sidebar);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .messages-container {
+            flex: 1;
+            padding: 25px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+            background-blend-mode: overlay;
+            background-opacity: 0.05;
+        }
+
+        .message {
+            max-width: 70%;
+            padding: 10px 15px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.5;
+            position: relative;
+        }
+
+        .message.in { align-self: flex-start; background: var(--msg-in); border-bottom-left-radius: 2px; }
+        .message.out { align-self: flex-end; background: var(--msg-out); border-bottom-right-radius: 2px; }
+
+        .msg-time {
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 5px;
+            text-align: right;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 20px;
+            background: var(--bg-sidebar);
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 15px;
+        }
+
+        input {
+            flex: 1;
+            background: #0f172a;
+            border: 1px solid var(--border);
+            padding: 12px 20px;
+            border-radius: 25px;
+            color: white;
+            outline: none;
+        }
+
+        button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0 25px;
+            border-radius: 25px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button:hover { opacity: 0.9; transform: scale(1.05); }
+
+        /* Splash Screen */
+        .splash {
+            position: absolute;
+            inset: 0;
+            background: var(--bg-main);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .splash h2 { color: var(--accent); margin-top: 20px; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h3>Söhbətlər</h3>
+            <div id="status" class="status-badge">Offline</div>
+        </div>
+        <div class="chat-list" id="chatList">
+            <!-- Chatlar bura gələcək -->
+        </div>
+    </div>
+
+    <div class="main-chat">
+        <div id="chatSplash" class="splash">
+            <svg width="100" height="100" viewBox="0 0 24 24" fill="var(--accent)">
+                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.07-1.38C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.06-.44-4.33-1.21l-.31-.19-3.22.88.88-3.22-.19-.31C4.44 15.06 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
+            </svg>
+            <h2>WhatsApp Dashboard</h2>
+            <p style="color: var(--text-secondary)">Söhbətə başlamaq üçün soldan seçin</p>
+        </div>
+
+        <div class="chat-header" id="chatHeader" style="display: none;">
+            <div class="chat-avatar" id="activeAvatar">?</div>
+            <div class="chat-info">
+                <div class="chat-name" id="activeName">Seçilməyib</div>
+                <div class="chat-last-msg" id="activeStatus">Online</div>
+            </div>
+        </div>
+
+        <div class="messages-container" id="msgContainer">
+            <!-- Mesajlar bura gələcək -->
+        </div>
+
+        <form class="input-area" id="msgForm">
+            <input type="text" id="msgInput" placeholder="Mesajınızı yazın..." autocomplete="off">
+            <button type="submit">Göndər</button>
+        </form>
+    </div>
+
+    <script>
+        const socket = io();
+        let activeChat = null;
+        const chats = new Map();
+
+        // Socket Eventləri
+        socket.on('connect', () => {
+            document.getElementById('status').textContent = 'Online';
+            document.getElementById('status').classList.add('online');
+        });
+
+        socket.on('disconnect', () => {
+            document.getElementById('status').textContent = 'Offline';
+            document.getElementById('status').classList.remove('online');
+        });
+
+        socket.on('whatsapp_ready', () => {
+            document.getElementById('status').textContent = 'WhatsApp Hazır';
+            document.getElementById('status').classList.add('online');
+        });
+
+        socket.on('new_message', (msg) => {
+            console.log('Yeni mesaj:', msg);
+            updateChatList(msg);
+            if (activeChat === msg.from) {
+                appendMessage(msg, 'in');
+            }
+        });
+
+        socket.on('message_sent', (msg) => {
+            if (activeChat === msg.to) {
+                appendMessage(msg, 'out');
+            }
+        });
+
+        // Funksiyalar
+        function updateChatList(msg) {
+            const chatList = document.getElementById('chatList');
+            const chatId = msg.from;
+            
+            if (!chats.has(chatId)) {
+                const item = document.createElement('div');
+                item.className = 'chat-item';
+                item.id = `chat-${chatId}`;
+                item.innerHTML = `
+                    <div class="chat-avatar">${msg.sender[0]}</div>
+                    <div class="chat-info">
+                        <div class="chat-name">${msg.sender}</div>
+                        <div class="chat-last-msg">${msg.body}</div>
+                    </div>
+                `;
+                item.onclick = () => selectChat(chatId, msg.sender);
+                chatList.prepend(item);
+                chats.set(chatId, { name: msg.sender, lastMsg: msg.body });
+            } else {
+                const item = document.getElementById(`chat-${chatId}`);
+                item.querySelector('.chat-last-msg').textContent = msg.body;
+                chatList.prepend(item);
+            }
+        }
+
+        function selectChat(id, name) {
+            activeChat = id;
+            document.getElementById('chatSplash').style.display = 'none';
+            document.getElementById('chatHeader').style.display = 'flex';
+            document.getElementById('activeName').textContent = name;
+            document.getElementById('activeAvatar').textContent = name[0];
+            document.getElementById('msgContainer').innerHTML = '';
+            
+            // Aktivlik vizualı
+            document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
+            document.getElementById(`chat-${id}`).classList.add('active');
+        }
+
+        function appendMessage(msg, type) {
+            const container = document.getElementById('msgContainer');
+            const div = document.createElement('div');
+            div.className = `message ${type}`;
+            div.innerHTML = `
+                ${msg.body}
+                <div class="msg-time">${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+            `;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        document.getElementById('msgForm').onsubmit = (e) => {
+            e.preventDefault();
+            const input = document.getElementById('msgInput');
+            if (!input.value || !activeChat) return;
+
+            socket.emit('send_whatsapp', {
+                to: activeChat,
+                body: input.value
+            });
+
+            appendMessage({ body: input.value }, 'out');
+            input.value = '';
+        };
+    </script>
+</body>
+</html>

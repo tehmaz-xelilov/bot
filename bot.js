@@ -119,42 +119,54 @@ const stats = {
     }
 };
 
-// ============ EXPRESS HEALTH CHECK ============
+// ============ EXPRESS & SOCKET.IO ============
 const app = express();
-const port = config.settings.health_port;
+const http = require('http').createServer(app);
+const io = require('socket.io')(http);
+
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/health', async (req, res) => {
     try {
         const state = await whatsapp.getState();
         res.json({
             status: 'ok',
-            timestamp: new Date().toISOString(),
             whatsapp: state,
             uptime: stats.getUptime(),
             stats: {
-                messagesReceived: stats.messagesReceived,
-                messagesSent: stats.messagesSent,
-                mediaReceived: stats.mediaReceived,
-                mediaSent: stats.mediaSent
-            },
-            memory: {
-                usage: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
-                total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
+                received: stats.messagesReceived,
+                sent: stats.messagesSent
             }
         });
-        logger.info(`Health check: ${state}`);
     } catch (error) {
-        res.status(500).json({
-            status: 'error',
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
-        logger.error(`Health check xətası: ${error.message}`);
+        res.status(500).json({ status: 'error', error: error.message });
     }
 });
 
-app.listen(port, () => {
-    logger.info(`Health check endpoint: http://localhost:${port}/health`);
+io.on('connection', (socket) => {
+    logger.info('Web Dashboard-a yeni bağlantı quruldu');
+    
+    // Əgər WhatsApp artıq bağlıdırsa, sayta bildir
+    whatsapp.getState().then(state => {
+        if (state === 'CONNECTED') socket.emit('whatsapp_ready');
+    }).catch(() => {});
+
+    socket.on('send_whatsapp', async (data) => {
+        try {
+            const targetNum = normalizePhoneNumber(data.to);
+            if (targetNum) {
+                await whatsapp.sendMessage(targetNum, data.body);
+                stats.incrementSent();
+            }
+        } catch (err) {
+            logger.error(`Dashboard xətası: ${err.message}`);
+        }
+    });
+});
+
+const port = config.settings.health_port;
+http.listen(port, () => {
+    logger.info(`Web Dashboard və Health check: http://localhost:${port}`);
 });
 
 // ============ TELEGRAM BOT ============
@@ -470,6 +482,7 @@ async function showContacts(chatId, page = 0, query = '') {
     } catch (err) {
         logger.error(`Kontaktları göstərmə xətası: ${err.message}`);
         await telegram.sendMessage(chatId, '❌ Kontaktlar yüklənərkən xəta baş verdi.');
+        handleKritikXeta(err);
     }
 }
 
@@ -922,6 +935,7 @@ whatsapp.on('qr', (qr) => {
 
 whatsapp.on('ready', () => {
     logger.info('WhatsApp bağlantısı quruldu');
+    io.emit('whatsapp_ready');
     console.log('✅ WhatsApp hazırdır!');
     
     sendToTelegram(
@@ -969,6 +983,14 @@ whatsapp.on('message', async (msg) => {
         }
         
         report += `📝 ${messageType}: ${escapeMarkdown(messageBody)}`;
+        
+        // Sayta ötür
+        io.emit('new_message', {
+            from: msg.from,
+            sender: contactInfo.name,
+            body: messageBody,
+            type: msg.type
+        });
         
         const inlineKeyboard = {
             reply_markup: {
@@ -1030,16 +1052,29 @@ whatsapp.on('message', async (msg) => {
 
 // ============ XƏTA İDARƏETMƏSİ ============
 
-process.on('uncaughtException', (error) => {
-    logger.error(`Gözlənilməz xəta: ${error.message}`);
-    if (error.message.includes('detached Frame') || error.message.includes('Session closed')) {
-        process.exit(1);
+function handleKritikXeta(error) {
+    const msg = error.message || error;
+    logger.error(`Kritik xəta tutuldu: ${msg}`);
+    
+    if (msg.includes('detached Frame') || msg.includes('Session closed') || msg.includes('Target closed') || msg.includes('Navigation failed')) {
+        sendToTelegram(`🚨 *Kritik Brauzer Xətası:* \`${escapeMarkdown(msg)}\`\nBot 5 saniyə ərzində yenidən başladılır...`, { parse_mode: 'Markdown' })
+            .finally(() => {
+                setTimeout(() => process.exit(1), 2000);
+            });
     }
-    sendToTelegram(`🚨 *Kritik xəta:* \`${escapeMarkdown(error.message)}\``, { parse_mode: 'Markdown' });
+}
+
+process.on('uncaughtException', (error) => {
+    handleKritikXeta(error);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    logger.error(`İşlənməmiş rejection: ${reason}`);
+    handleKritikXeta(reason);
+});
+
+// WhatsApp client xətalarını da dinləyək
+whatsapp.on('error', (error) => {
+    handleKritikXeta(error);
 });
 
 // ============ BAŞLAT ============
