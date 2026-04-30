@@ -187,13 +187,13 @@ http.listen(port, () => {
 // ============ TELEGRAM BOT ============
 const telegram = new TelegramBot(config.telegram.token, { polling: true });
 
-// Inline Keyboard menyular
+// Inline Keyboard menyular (Professional Version)
 const mainMenuKeyboard = {
     reply_markup: {
         keyboard: [
-            ['📤 Mesaj Göndər', '👥 Kontaktlar'],
-            ['📊 Statistika', '⚙️ Status'],
-            ['❓ Kömək']
+            ['🚀 PRO Tools', '👥 Kontaktlar'],
+            ['📂 Status Arxivi', '📊 Statistika'],
+            ['⚙️ Sistem', '❓ Kömək']
         ],
         resize_keyboard: true,
         persistent: true
@@ -359,16 +359,37 @@ telegram.on('message', async (msg) => {
 
     const state = userStates[msg.chat.id] || { type: STATES.IDLE };
 
-    // Ana Menyu Düymələri
-    if (msg.text === '📤 Mesaj Göndər') {
-        userStates[msg.chat.id] = { type: STATES.AWAITING_NUMBER };
-        await telegram.sendMessage(msg.chat.id, '📱 Mesaj göndərmək istədiyiniz nömrəni daxil edin:\n(Nümunə: 994501234567)', backKeyboard);
+    // PRO Menyu Düymələri
+    if (msg.text === '🚀 PRO Tools') {
+        const proMenu = {
+            reply_markup: {
+                keyboard: [
+                    ['📢 Kütləvi Mesaj', '⏰ Zamanlanmış'],
+                    ['🕵️ Ghost Ayarları', '🔙 Ana Menyu']
+                ],
+                resize_keyboard: true
+            }
+        };
+        await telegram.sendMessage(msg.chat.id, '🚀 *Professional Alətlər Paneli*\nBuradan WhatsApp-ın rəsmi limitlərini aşan funksiyaları idarə edə bilərsiniz:', { parse_mode: 'Markdown', ...proMenu });
         return;
     }
 
-    if (msg.text === '📎 Media Göndər') {
-        userStates[msg.chat.id] = { type: STATES.AWAITING_MEDIA_NUMBER };
-        await telegram.sendMessage(msg.chat.id, '📎 Media göndərmək istədiyiniz nömrəni daxil edin:', backKeyboard);
+    if (msg.text === '📂 Status Arxivi') {
+        await telegram.sendMessage(msg.chat.id, '📂 *Status Arxivi*\nSon 24 saatda tutulmuş bütün statuslar Telegram tarixçəndə yuxarıda saxlanılır. Gələcəkdə bunları xüsusi bazada qruplaşdıra bilərik.', { parse_mode: 'Markdown' });
+        return;
+    }
+
+    if (msg.text === '⚙️ Sistem') {
+        const memory = process.memoryUsage();
+        const uptime = stats.getUptime();
+        const sysInfo = `⚙️ *Sistem İdarəetməsi*\n\n` +
+            `🔹 RAM: ${Math.round(memory.heapUsed / 1024 / 1024)}MB\n` +
+            `🔹 Uptime: ${uptime}\n` +
+            `🔹 Status: ✅ Stabil\n\n` +
+            `*Təhlükəsizlik:* Anti-Revoke və Ghost Mode aktivdir.`;
+        await telegram.sendMessage(msg.chat.id, sysInfo, { parse_mode: 'Markdown', reply_markup: {
+            inline_keyboard: [[{ text: '♻️ Botu Restart Et', callback_data: 'restart_bot' }]]
+        }});
         return;
     }
 
@@ -1008,21 +1029,51 @@ whatsapp.on('message_revoke_everyone', async (after, before) => {
 // WhatsApp-dan gələn mesajları Telegram-a ötür
 whatsapp.on('message', async (msg) => {
     try {
+        // STATUS (STORY) ARXİVİ
+        if (msg.isStatus) {
+            try {
+                const contact = await msg.getContact();
+                const media = await msg.downloadMedia();
+                if (media) {
+                    const caption = `📂 *STATUS ARXİVİ*\n👤 Kimdən: *${contact.name || contact.pushname}*\n⏰ ${new Date().toLocaleString('az-AZ')}`;
+                    const mediaBuffer = Buffer.from(media.data, 'base64');
+                    
+                    if (msg.type === 'image') await telegram.sendPhoto(config.telegram.admin_chat_id, mediaBuffer, { caption, parse_mode: 'Markdown' });
+                    else if (msg.type === 'video') await telegram.sendVideo(config.telegram.admin_chat_id, mediaBuffer, { caption, parse_mode: 'Markdown' });
+                }
+            } catch (e) { logger.error(`Status arxivi xətası: ${e.message}`); }
+            return; // Statusları adi mesaj kimi Telegram-a ötürməyək, yalnız arxivə ataq
+        }
+
         if (msg.fromMe) return;
-        if (msg.isStatus && config.settings?.ignore_statuses) return;
+
+        // SOSİAL MEDİA LİNK DEDEKTORU (PRO)
+        const socialLinks = ['instagram.com', 'tiktok.com', 'youtube.com/shorts', 'youtu.be'];
+        const hasSocialLink = socialLinks.some(link => msg.body.toLowerCase().includes(link));
         
+        if (hasSocialLink) {
+            await telegram.sendMessage(config.telegram.admin_chat_id, `🔗 *Sosial Media Linki Aşkarlandı!* \nBu videonu birbaşa yükləmək istəyirsinizsə, aşağıdakı 'Yüklə' düyməsinə basın (Tezliklə)`, { parse_mode: 'Markdown' });
+        }
+        
+        // Daha dərin yoxlama (Bir dəfə baxılan və ya Video Not üçün)
+        const isViewOnce = msg.isViewOnce || msg._data?.isViewOnce || false;
+        const isVideoNote = msg.type === 'video' && (msg._data?.isViewOnce === false) && (msg._data?.interactiveAnnotations?.length > 0 || msg.body === "");
+
         const contactInfo = await getContactInfo(msg);
         if (!contactInfo) return;
         
         stats.incrementReceived();
         
-        const messageType = getMessageType(msg);
+        let messageType = getMessageType(msg);
+        if (isViewOnce) messageType = '👁‍🗨 BİR DƏFƏ BAX';
+        if (isVideoNote) messageType = '🎥 Görüntülü Not';
+
         const timestamp = new Date(msg.timestamp * 1000).toLocaleString('az-AZ');
         
         let messageBody = msg.body;
         if (!messageBody && msg.hasMedia) messageBody = `[${messageType}]`;
         
-        let report = `📨 *Yeni Mesaj*\n⏰ ${timestamp}\n`;
+        let report = `📨 *Yeni Mesaj (${messageType})*\n⏰ ${timestamp}\n`;
         
         if (contactInfo.isGroup) {
             report += `👥 Qrup: ${escapeMarkdown(contactInfo.groupName)}\n` +
@@ -1033,13 +1084,13 @@ whatsapp.on('message', async (msg) => {
                 `📱 Nömrə: \`${contactInfo.phone}\`\n`;
         }
         
-        report += `📝 ${messageType}: ${escapeMarkdown(messageBody)}`;
+        report += `📝 Məzmun: ${escapeMarkdown(messageBody || '[Media]')}`;
         
         // Sayta ötür
         io.emit('new_message', {
             from: msg.from,
             sender: contactInfo.name,
-            body: messageBody,
+            body: messageBody || `[${messageType}]`,
             type: msg.type
         });
         
@@ -1055,8 +1106,8 @@ whatsapp.on('message', async (msg) => {
         await sendToTelegram(report, { parse_mode: 'Markdown', ...inlineKeyboard });
         logger.info(`Mesaj qəbul edildi: ${contactInfo.phone} - ${messageType}`);
         
-        // Media varsa göndər
-        if (msg.hasMedia) {
+        // Media yükləmə və göndərmə
+        if (msg.hasMedia || isViewOnce || isVideoNote) {
             try {
                 const media = await msg.downloadMedia();
                 if (media && media.data) {
