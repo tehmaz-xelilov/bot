@@ -478,14 +478,19 @@ telegram.onText(/\/help/, async (msg) => {
 // ============ EVENTLƏR ============
 
 whatsapp.on('qr', (qr) => {
-    console.log('--- QR KODU SKAN EDİN ---');
-    qrcode.generate(qr, { small: true });
-
-    telegram.sendMessage(
-        config.telegram.admin_chat_id,
-        "📱 *WhatsApp QR kodu hazırdır*\nZəhmət olmasa terminaldan skan edin.",
-        { parse_mode: 'Markdown' }
-    ).catch(err => console.error('QR mesajı xətası:', err));
+    console.log('--- QR KODU HAZIRDIR ---');
+    
+    // QR kodu şəkil kimi Telegram-a göndər
+    const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
+    
+    telegram.sendPhoto(config.telegram.admin_chat_id, qrImageUrl, {
+        caption: "📱 *WhatsApp QR kodu hazırdır*\n\nZəhmət olmasa bu kodu WhatsApp-dan skan edin. Kodu skan etmək üçün 1 dəqiqəniz var.",
+        parse_mode: 'Markdown'
+    }).catch(err => {
+        console.error('QR mesajı xətası:', err);
+        // Əgər şəkil göndərilməsə, terminalda göstər (ehtiyat variant)
+        qrcode.generate(qr, { small: true });
+    });
 });
 
 whatsapp.on('ready', () => {
