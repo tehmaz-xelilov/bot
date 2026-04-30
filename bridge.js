@@ -123,8 +123,12 @@ async function getContactInfo(msg) {
             isMe: contact.isMe || false
         };
     } catch (error) {
-        console.error('Kontakt məlumatı xətası:', error);
-        return null;
+        console.error('Kontakt məlumatı xətası:', error.message);
+        return {
+            name: msg.from || 'Naməlum',
+            phone: formatPhoneNumber(msg.from),
+            isGroup: false
+        };
     }
 }
 
@@ -596,14 +600,21 @@ whatsapp.on('message', async (msg) => {
         }
 
     } catch (error) {
-        console.error('Mesaj emalı xətası:', error);
+        console.error('Mesaj emalı xətası:', error.message);
+        if (error.message.includes('detached Frame') || error.message.includes('Session closed')) {
+            console.error('🚨 Kritik brauzer xətası! Bot yenidən başladılır...');
+            process.exit(1); // Railway botu avtomatik restart edəcək
+        }
     }
 });
 
 process.on('uncaughtException', (error) => {
-    console.error('Gözlənilməz xəta:', error);
-    sendToTelegram(`🚨 *Kritik xəta:* \`${escapeMarkdown(error.message)}\``,
-        { parse_mode: 'Markdown' });
+    console.error('Gözlənilməz xəta:', error.message);
+    if (error.message.includes('detached Frame') || error.message.includes('Session closed')) {
+        process.exit(1);
+    }
+    sendToTelegram(`🚨 *Kritik xəta:* \`${escapeMarkdown(error.message)}\`\nBot yenidən başladılır...`,
+        { parse_mode: 'Markdown' }).then(() => process.exit(1));
 });
 
 console.log('🚀 Bot başladılır...');
