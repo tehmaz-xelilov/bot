@@ -151,6 +151,21 @@ io.on('connection', (socket) => {
         if (state === 'CONNECTED') socket.emit('whatsapp_ready');
     }).catch(() => {});
 
+    socket.on('get_initial_chats', async () => {
+        try {
+            const whatsappChats = await whatsapp.getChats();
+            const filtered = whatsappChats.slice(0, 20).map(c => ({
+                id: c.id._serialized,
+                name: c.name,
+                lastMsg: c.lastMessage ? c.lastMessage.body : ''
+            }));
+            socket.emit('initial_chats', filtered);
+            logger.info('İlkin söhbət siyahısı sayta göndərildi');
+        } catch (err) {
+            logger.error(`Initial chats xətası: ${err.message}`);
+        }
+    });
+
     socket.on('send_whatsapp', async (data) => {
         try {
             const targetNum = normalizePhoneNumber(data.to);
@@ -164,7 +179,7 @@ io.on('connection', (socket) => {
     });
 });
 
-const port = config.settings.health_port;
+const port = process.env.PORT || config.settings.health_port || 3000;
 http.listen(port, () => {
     logger.info(`Web Dashboard və Health check: http://localhost:${port}`);
 });
