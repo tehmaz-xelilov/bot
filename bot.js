@@ -370,7 +370,14 @@ telegram.on('message', async (msg) => {
                 await telegram.sendMessage(msg.chat.id, `✅ Mesaj ${state.number} nömrəsinə göndərildi!`, mainMenuKeyboard);
                 userStates[msg.chat.id] = { type: STATES.IDLE };
             } catch (err) {
+                logger.error(`Mesaj göndərmə xətası: ${err.message}`);
                 await telegram.sendMessage(msg.chat.id, `❌ Göndərilmədi: ${err.message}`);
+                
+                // Əgər kritik brauzer xətasıdırsa, botu restart et
+                if (err.message.includes('detached Frame') || err.message.includes('Session closed')) {
+                    await telegram.sendMessage(msg.chat.id, '🚨 Kritik brauzer xətası! Bot 10 saniyə ərzində yenidən başladılır...');
+                    setTimeout(() => process.exit(1), 2000);
+                }
             }
             break;
 
