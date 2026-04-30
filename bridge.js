@@ -483,10 +483,10 @@ telegram.onText(/\/help/, async (msg) => {
 
 whatsapp.on('qr', (qr) => {
     console.log('--- QR KODU HAZIRDIR ---');
-    
+
     // QR kodu şəkil kimi Telegram-a göndər
     const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
-    
+
     telegram.sendPhoto(config.telegram.admin_chat_id, qrImageUrl, {
         caption: "📱 *WhatsApp QR kodu hazırdır*\n\nZəhmət olmasa bu kodu WhatsApp-dan skan edin. Kodu skan etmək üçün 1 dəqiqəniz var.",
         parse_mode: 'Markdown'
@@ -525,7 +525,7 @@ whatsapp.on('disconnected', (reason) => {
 whatsapp.on('message', async (msg) => {
     try {
         if (msg.fromMe) return;
-        if (msg.isStatus && config.settings?.ignore_statuses) return;
+        if (msg.isStatus) return; // Status (Story) paylaşımlarını görməzdən gəl
 
         const contactInfo = await getContactInfo(msg);
         if (!contactInfo) return;
