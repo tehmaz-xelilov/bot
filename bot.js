@@ -553,10 +553,23 @@ telegram.on('callback_query', async (callbackQuery) => {
     }
 
     // Bağla
-    if (data === 'close_contacts') {
-        await telegram.answerCallbackQuery(callbackQuery.id);
-        await telegram.deleteMessage(chatId, callbackQuery.message.message_id);
-        await telegram.sendMessage(chatId, 'Kontaktlar bağlandı.', mainMenuKeyboard);
+    // Oxundu olaraq işarələ
+    if (data.startsWith('seen_')) {
+        try {
+            const msgId = data.replace('seen_', '');
+            // Mesajın aid olduğu söhbəti tap və oxundu işarələ
+            const msgParts = msgId.split('_');
+            const chat = await whatsapp.getChatById(msgParts[1] + '@' + msgParts[2].split('@')[0]);
+            await chat.sendSeen();
+            await telegram.answerCallbackQuery(callbackQuery.id, { text: '✅ Oxundu olaraq işarələndi' });
+            // Düyməni silək ki, bir də basılmasın
+            await telegram.editMessageReplyMarkup({ inline_keyboard: [[{ text: `💬 Cavab Yaz`, callback_data: `reply_${formatPhoneNumber(msgParts[1])}` }]] }, {
+                chat_id: chatId,
+                message_id: callbackQuery.message.message_id
+            });
+        } catch (e) {
+            await telegram.answerCallbackQuery(callbackQuery.id, { text: '❌ Xəta: ' + e.message });
+        }
     }
 });
 
@@ -969,6 +982,29 @@ whatsapp.on('disconnected', (reason) => {
     sendToTelegram(`⚠️ *WhatsApp bağlantısı kəsildi*\nSəbəb: ${reason}`, { parse_mode: 'Markdown' });
 });
 
+// ============ SİLİNMİŞ MESAJLARIN İZLƏNİLMƏSİ ============
+whatsapp.on('message_revoke_everyone', async (after, before) => {
+    try {
+        if (!before) {
+            logger.info('Silinmiş mesaj tapıldı, lakin məzmunu keşdə yoxdur.');
+            return;
+        }
+
+        const contact = await before.getContact();
+        const timestamp = new Date(before.timestamp * 1000).toLocaleString('az-AZ');
+        
+        let report = `🗑 *MESAJ SİLİNDİ!*\n\n` +
+            `👤 Kimdən: *${contact.name || contact.pushname || before.from}*\n` +
+            `⏰ Göndərilib: ${timestamp}\n` +
+            `📝 Silinən mətn: _${escapeMarkdown(before.body || '[Media və ya Boş]')}_`;
+
+        await sendToTelegram(report, { parse_mode: 'Markdown' });
+        logger.info(`Silinmiş mesaj tutuldu: ${before.from}`);
+    } catch (error) {
+        logger.error(`Silinmiş mesaj xətası: ${error.message}`);
+    }
+});
+
 // WhatsApp-dan gələn mesajları Telegram-a ötür
 whatsapp.on('message', async (msg) => {
     try {
@@ -1010,7 +1046,8 @@ whatsapp.on('message', async (msg) => {
         const inlineKeyboard = {
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: `💬 ${contactInfo.name}-a Cavab Yaz`, callback_data: `reply_${contactInfo.phone}` }]
+                    [{ text: `💬 ${contactInfo.name}-a Cavab Yaz`, callback_data: `reply_${contactInfo.phone}` }],
+                    [{ text: `🔵 Oxundu olaraq işarələ`, callback_data: `seen_${msg.id._serialized}` }]
                 ]
             }
         };
@@ -1026,9 +1063,14 @@ whatsapp.on('message', async (msg) => {
                     stats.incrementMediaReceived();
                     
                     const mediaBuffer = Buffer.from(media.data, 'base64');
-                    const caption = contactInfo.isGroup
+                    let caption = contactInfo.isGroup
                         ? `👥 ${escapeMarkdown(contactInfo.groupName)} - 👤 ${escapeMarkdown(contactInfo.name)} (${contactInfo.phone})`
                         : `👤 ${escapeMarkdown(contactInfo.name)} (${contactInfo.phone})`;
+                    
+                    // "Bir dəfə bax" (View Once) yoxlaması
+                    if (msg.isViewOnce) {
+                        caption = `👁‍🗨 *BİR DƏFƏ BAX* mesajı tutuldu!\n${caption}`;
+                    }
                     
                     switch (msg.type) {
                         case 'image':
