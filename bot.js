@@ -1,9 +1,6 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const TelegramBot = require('node-telegram-bot-api');
-const qrcode = require('qrcode-terminal');
 const fs = require('fs');
-const axios = require('axios');
-const path = require('path');
 
 // ============ KONFİQURASİYA ============
 const config = {
@@ -26,8 +23,6 @@ const whatsapp = new Client({
     }
 });
 
-const userStates = {}; // { chatId: { type: 'REPLY', number: '...' } }
-
 // ============ YARDIMÇI FUNKSİYALAR ============
 function escapeMarkdown(text) {
     if (!text) return '';
@@ -43,17 +38,19 @@ async function sendToTelegram(text, options = {}) {
 }
 
 // ============ WHATSAPP HADİSƏLƏRİ ============
+
+// QR Kodu Telegram-a şəkil kimi göndər
 whatsapp.on('qr', (qr) => {
-    console.log('QR Kod hazırdır. Skan edin...');
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
     telegram.sendPhoto(config.adminId, qrUrl, { caption: '📱 WhatsApp QR kodunu skan edin.' });
 });
 
+// Hazır olanda bildiriş ver
 whatsapp.on('ready', () => {
-    console.log('✅ WhatsApp qoşuldu!');
     sendToTelegram('✅ *WhatsApp UserBot aktivdir!*', { parse_mode: 'Markdown' });
 });
 
+// Mesajları ötür
 whatsapp.on('message', async (msg) => {
     try {
         if (msg.fromMe) return;
@@ -61,20 +58,12 @@ whatsapp.on('message', async (msg) => {
         const contact = await msg.getContact();
         const chat = await msg.getChat();
         const name = contact.name || contact.pushname || msg.from.split('@')[0];
-        const isGroup = chat.isGroup;
         
-        let report = `👤 *${escapeMarkdown(name)}*${isGroup ? ` (👥 ${escapeMarkdown(chat.name)})` : ''}\n`;
+        let report = `👤 *${escapeMarkdown(name)}*${chat.isGroup ? ` (👥 ${escapeMarkdown(chat.name)})` : ''}\n`;
         report += `📱 \`${msg.from.split('@')[0]}\`\n\n`;
         report += `📝 ${escapeMarkdown(msg.body || '[Media]')}`;
 
-        const options = {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [[{ text: '💬 Cavab Yaz', callback_data: `reply_${msg.from}` }]]
-            }
-        };
-
-        await sendToTelegram(report, options);
+        await sendToTelegram(report, { parse_mode: 'Markdown' });
 
         // Media varsa göndər
         if (msg.hasMedia) {
@@ -94,44 +83,11 @@ whatsapp.on('message', async (msg) => {
     }
 });
 
-// ============ TELEGRAM HADİSƏLƏRİ ============
-telegram.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    if (query.data.startsWith('reply_')) {
-        const number = query.data.replace('reply_', '');
-        userStates[chatId] = { type: 'AWAITING_REPLY', number: number };
-        
-        await telegram.answerCallbackQuery(query.id);
-        await telegram.sendMessage(chatId, `💬 *${number.split('@')[0]}* üçün cavabınızı yazın:`, { 
-            parse_mode: 'Markdown',
-            reply_markup: { force_reply: true }
-        });
-    }
-});
-
-telegram.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    if (msg.text === '/start') {
-        return sendToTelegram('🚀 Bot hazır vəziyyətdədir. Mesaj gələndə bura ötürüləcək.');
-    }
-
-    const state = userStates[chatId];
-    if (state && state.type === 'AWAITING_REPLY' && msg.text) {
-        try {
-            await whatsapp.sendMessage(state.number, msg.text);
-            await telegram.sendMessage(chatId, '✅ Mesaj göndərildi.');
-            delete userStates[chatId];
-        } catch (e) {
-            await telegram.sendMessage(chatId, `❌ Xəta baş verdi: ${e.message}`);
-        }
-    }
-});
-
-// ============ XƏTA İDARƏETMƏSİ (AUTO-RESTART) ============
+// ============ XƏTA İDARƏETMƏSİ (STABİLLİK) ============
 process.on('uncaughtException', (err) => {
     console.error('Kritik xəta:', err.message);
     if (err.message.includes('detached Frame') || err.message.includes('Session closed')) {
-        process.exit(1);
+        process.exit(1); // Railway botu avtomatik yenidən başladacaq
     }
 });
 
@@ -139,5 +95,4 @@ process.on('unhandledRejection', (reason) => {
     console.error('Unhandled Rejection:', reason);
 });
 
-console.log('🚀 Bot başladılır...');
 whatsapp.initialize();
