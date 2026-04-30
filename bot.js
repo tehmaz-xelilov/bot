@@ -1,20 +1,26 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
+const { spawn } = require('child_process');
 
-// ============ KONFİQURASİYA ============
-const config = {
-    token: process.env.TELEGRAM_TOKEN,
-    adminId: process.env.TELEGRAM_ADMIN_ID
-};
-
-if (!config.token || !config.adminId) {
-    console.error('❌ Xəta: TELEGRAM_TOKEN və ya TELEGRAM_ADMIN_ID tapılmadı!');
-    process.exit(1);
+// Auto‑restart helper – spawns a new instance of this script and exits the current process.
+function autoRestart() {
+    try {
+        const child = spawn(process.argv[0], process.argv.slice(1), {
+            detached: true,
+            stdio: 'ignore'
+        });
+        child.unref();
+    } catch (e) {
+        console.error('Restart xətası:', e.message);
+    }
+    process.exit(0);
 }
 
-// ============ BOTLARIN BAŞLADILMASI ============
-const telegram = new TelegramBot(config.token, { polling: true });
+const TelegramBot = require('node-telegram-bot-api');
+
+// Konfiqurasiya
+const token = process.env.TELEGRAM_TOKEN;
+const adminId = process.env.TELEGRAM_ADMIN_ID;
+
+const telegram = new TelegramBot(token, { polling: true });
 const whatsapp = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -23,76 +29,57 @@ const whatsapp = new Client({
     }
 });
 
-// ============ YARDIMÇI FUNKSİYALAR ============
-function escapeMarkdown(text) {
-    if (!text) return '';
-    return text.toString().replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-}
-
-async function sendToTelegram(text, options = {}) {
-    try {
-        return await telegram.sendMessage(config.adminId, text, options);
-    } catch (e) {
-        console.error('Telegram göndərim xətası:', e.message);
-    }
-}
-
-// ============ WHATSAPP HADİSƏLƏRİ ============
-
-// QR Kodu Telegram-a şəkil kimi göndər
+// QR Kod
 whatsapp.on('qr', (qr) => {
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
-    telegram.sendPhoto(config.adminId, qrUrl, { caption: '📱 WhatsApp QR kodunu skan edin.' });
+    telegram.sendPhoto(adminId, qrUrl, { caption: 'WhatsApp QR kodunu skan edin.' });
 });
 
-// Hazır olanda bildiriş ver
+// Hazır olanda
 whatsapp.on('ready', () => {
-    sendToTelegram('✅ *WhatsApp UserBot aktivdir!*', { parse_mode: 'Markdown' });
+    telegram.sendMessage(adminId, '✅ Bot aktivdir. Mesajlar bura gələcək.');
 });
 
-// Mesajları ötür
+// Mesaj Ötürülməsi (Ən sadə forma)
 whatsapp.on('message', async (msg) => {
+    if (msg.fromMe) return;
+
     try {
-        if (msg.fromMe) return;
-
         const contact = await msg.getContact();
-        const chat = await msg.getChat();
-        const name = contact.name || contact.pushname || msg.from.split('@')[0];
+        const name = contact.pushname || contact.name || 'Bilinməyən';
+        const from = msg.from.split('@')[0];
         
-        let report = `👤 *${escapeMarkdown(name)}*${chat.isGroup ? ` (👥 ${escapeMarkdown(chat.name)})` : ''}\n`;
-        report += `📱 \`${msg.from.split('@')[0]}\`\n\n`;
-        report += `📝 ${escapeMarkdown(msg.body || '[Media]')}`;
-
-        await sendToTelegram(report, { parse_mode: 'Markdown' });
+        // Sadəcə mətn (Markdown istifadə olunmur ki, xəta verməsin)
+        const report = `👤 ${name} (${from})\n\n${msg.body || '[Media]'}`;
+        await telegram.sendMessage(adminId, report);
 
         // Media varsa göndər
         if (msg.hasMedia) {
             const media = await msg.downloadMedia();
             if (media) {
                 const buffer = Buffer.from(media.data, 'base64');
-                const caption = `📎 Media: ${name}`;
-                
-                if (msg.type === 'image') await telegram.sendPhoto(config.adminId, buffer, { caption });
-                else if (msg.type === 'video') await telegram.sendVideo(config.adminId, buffer, { caption });
-                else if (msg.type === 'audio' || msg.type === 'ptt') await telegram.sendAudio(config.adminId, buffer, { caption });
-                else await telegram.sendDocument(config.adminId, buffer, { caption, filename: media.filename });
+                if (msg.type === 'image') await telegram.sendPhoto(adminId, buffer);
+                else if (msg.type === 'video') await telegram.sendVideo(adminId, buffer);
+                else if (msg.type === 'audio' || msg.type === 'ptt') await telegram.sendAudio(adminId, buffer);
+                else await telegram.sendDocument(adminId, buffer, { filename: media.filename });
             }
         }
     } catch (e) {
-        console.error('Mesaj emalı xətası:', e.message);
+        console.error('Xəta:', e.message);
     }
 });
 
-// ============ XƏTA İDARƏETMƏSİ (STABİLLİK) ============
+// Manual restart command (admin only)
+telegram.onText(/\/restart/, (msg) => {
+    if (msg.chat.id != adminId) return;
+    telegram.sendMessage(adminId, '🔄 Bot yenidən başladılır...').catch(() => {});
+    autoRestart();
+});
+
+// Stabillik üçün – avtomatik yenidən başla
 process.on('uncaughtException', (err) => {
     console.error('Kritik xəta:', err.message);
-    if (err.message.includes('detached Frame') || err.message.includes('Session closed')) {
-        process.exit(1); // Railway botu avtomatik yenidən başladacaq
-    }
-});
-
-process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled Rejection:', reason);
+    autoRestart();
 });
 
 whatsapp.initialize();
