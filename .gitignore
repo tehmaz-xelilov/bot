@@ -5,5 +5,3 @@ config.json
 .env
 package-lock.json
 *.log
-logs/
-tmp/

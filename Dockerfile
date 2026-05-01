@@ -24,7 +24,6 @@ RUN apt-get update && \
     libpangocairo-1.0-0 \
     libcups2 \
     chromium \
-    ffmpeg \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
